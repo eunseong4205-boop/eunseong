@@ -8,11 +8,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: repository-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Repository checks
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -54,7 +58,27 @@ jobs:
           for error in errors:
               print(error)
           sys.exit(bool(errors))
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: cinepulse/package-lock.json
+      - name: Install locked dependencies
+        working-directory: cinepulse
+        run: npm ci --no-audit --no-fund
+      - name: Type check
+        working-directory: cinepulse
+        run: npm run typecheck
+      - name: Test cinema data and predictions
+        working-directory: cinepulse
+        run: npm test
+      - name: Build Next.js application
+        working-directory: cinepulse
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run build:next
       - name: Write summary
         run: |
           echo "### Repository checks passed" >> "$GITHUB_STEP_SUMMARY"
-          echo "Whitespace and unresolved merge markers checked. No application tests or builds are configured yet. No OpenAI API calls were made." >> "$GITHUB_STEP_SUMMARY"
+          echo "Whitespace, merge markers, CINEPULSE types, data tests, and Next.js production build passed. No paid API calls were made." >> "$GITHUB_STEP_SUMMARY"
