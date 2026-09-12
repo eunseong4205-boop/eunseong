@@ -1,0 +1,55 @@
+name: Codex
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Codex에게 요청할 작업'
+        required: true
+        default: '저장소를 살펴보고 현재 상태와 다음 개발 단계를 한국어로 정리해 주세요.'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: Check setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Check API key configuration
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::Add OPENAI_API_KEY in Settings > Secrets and variables > Actions."
+            echo "### Setup pending: OPENAI_API_KEY is missing" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then exit 1; fi
+          else
+            echo "### OPENAI_API_KEY is configured (validity not yet tested)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  codex:
+    name: Run Codex
+    if: github.event_name == 'workflow_dispatch'
+    needs: readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: ${{ inputs.prompt }}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          output-file: codex-output.md
