@@ -1,55 +1,60 @@
-name: Codex
+name: Repository checks
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
-    inputs:
-      prompt:
-        description: 'Codex에게 요청할 작업'
-        required: true
-        default: '저장소를 살펴보고 현재 상태와 다음 개발 단계를 한국어로 정리해 주세요.'
-        type: string
 
 permissions:
   contents: read
 
 jobs:
-  readiness:
-    name: Check setup
+  check:
+    name: Repository checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Check API key configuration
+          fetch-depth: 0
+      - name: Check whitespace
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "::warning::Add OPENAI_API_KEY in Settings > Secrets and variables > Actions."
-            echo "### Setup pending: OPENAI_API_KEY is missing" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then exit 1; fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
           else
-            echo "### OPENAI_API_KEY is configured (validity not yet tested)" >> "$GITHUB_STEP_SUMMARY"
+            git show --format= --check HEAD
           fi
+      - name: Check unresolved merge markers
+        shell: python
+        run: |
+          import pathlib
+          import re
+          import subprocess
+          import sys
 
-  codex:
-    name: Run Codex
-    if: github.event_name == 'workflow_dispatch'
-    needs: readiness
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Run Codex
-        id: codex
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt: ${{ inputs.prompt }}
-          sandbox: read-only
-          safety-strategy: drop-sudo
-          output-file: codex-output.md
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          errors = []
+          for raw in paths:
+              if not raw:
+                  continue
+              path = pathlib.Path(raw.decode("utf-8", errors="surrogateescape"))
+              if path.is_symlink() or not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if b"\0" in data:
+                  continue
+              for number, line in enumerate(data.splitlines(), 1):
+                  if re.match(rb"^(<{7}|>{7}|\|{7})( |$)", line):
+                      errors.append(f"{path}:{number}: unresolved merge marker")
+          for error in errors:
+              print(error)
+          sys.exit(bool(errors))
+      - name: Write summary
+        run: |
+          echo "### Repository checks passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Whitespace and unresolved merge markers checked. No application tests or builds are configured yet. No OpenAI API calls were made." >> "$GITHUB_STEP_SUMMARY"
